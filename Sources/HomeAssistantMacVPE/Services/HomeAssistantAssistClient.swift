@@ -1,11 +1,17 @@
 import Foundation
 
+enum AssistPipelineStartStage: String {
+    case wakeWord = "wake_word"
+    case stt
+}
+
 @MainActor
 final class HomeAssistantAssistClient {
     var onLog: ((String) -> Void)?
     var onState: ((AssistantState) -> Void)?
     var onBinaryHandler: ((UInt8) -> Void)?
     var onWakeWordDetected: (() -> Void)?
+    var onConversationContinuation: ((Bool, String?) -> Void)?
     var onPipelineError: ((String, String) -> Void)?
     var onTTSURL: ((URL) -> Void)?
 
@@ -104,7 +110,12 @@ final class HomeAssistantAssistClient {
         return (pipelines, preferred)
     }
 
-    func startPipeline(settings: AppSettings, sampleRate: Double) async throws {
+    func startPipeline(
+        settings: AppSettings,
+        sampleRate: Double,
+        startStage requestedStartStage: AssistPipelineStartStage? = nil,
+        conversationID: String? = nil
+    ) async throws {
         guard task != nil else {
             throw AssistClientError.notConnected
         }
@@ -112,7 +123,7 @@ final class HomeAssistantAssistClient {
         binaryHandlerID = nil
         lastAudioSendTask?.cancel()
         lastAudioSendTask = nil
-        let startStage = settings.useWakeWord ? "wake_word" : "stt"
+        let startStage = requestedStartStage ?? (settings.useWakeWord ? .wakeWord : .stt)
         var input: [String: Any] = [
             "sample_rate": Int(sampleRate)
         ]
@@ -126,18 +137,23 @@ final class HomeAssistantAssistClient {
             input["auto_gain_dbfs"] = autoGainDBFS
         }
 
-        if settings.useWakeWord {
+        if startStage == .wakeWord {
             input["timeout"] = 30
         }
 
         var command: [String: Any] = [
             "id": nextCommandID(),
             "type": "assist_pipeline/run",
-            "start_stage": startStage,
+            "start_stage": startStage.rawValue,
             "end_stage": "tts",
             "input": input,
             "timeout": 300
         ]
+
+        if let conversationID,
+           !conversationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            command["conversation_id"] = conversationID
+        }
 
         let pipeline = settings.pipelineID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !pipeline.isEmpty {
@@ -145,7 +161,7 @@ final class HomeAssistantAssistClient {
         }
 
         try await sendJSON(command)
-        onLog?("Started Assist pipeline from \(startStage)")
+        onLog?("Started Assist pipeline from \(startStage.rawValue)")
     }
 
     func sendAudioChunk(_ data: Data) {
@@ -254,6 +270,8 @@ final class HomeAssistantAssistClient {
             onState?(.thinking)
         case "intent-start":
             onState?(.thinking)
+        case "intent-end":
+            handleIntentEnd(data)
         case "tts-start":
             onState?(.speaking)
         case "tts-end", "run-end":
@@ -276,6 +294,21 @@ final class HomeAssistantAssistClient {
             onLog?(message)
         default:
             break
+        }
+    }
+
+    private func handleIntentEnd(_ data: [String: Any]) {
+        guard let intentOutput = data["intent_output"] as? [String: Any] else {
+            onConversationContinuation?(false, nil)
+            return
+        }
+
+        let shouldContinue = intentOutput["continue_conversation"] as? Bool ?? false
+        let conversationID = (intentOutput["conversation_id"] as? String) ?? (data["conversation_id"] as? String)
+        onConversationContinuation?(shouldContinue, conversationID)
+
+        if shouldContinue {
+            onLog?("Assistant is waiting for a follow-up response")
         }
     }
 

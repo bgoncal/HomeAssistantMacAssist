@@ -2,6 +2,11 @@ import AppKit
 import AVFoundation
 import Foundation
 
+enum ResponsePlaybackResult {
+    case finished
+    case interrupted
+}
+
 @MainActor
 final class SpeechPlaybackService: NSObject, NSSoundDelegate {
     private enum SoundRole {
@@ -11,11 +16,12 @@ final class SpeechPlaybackService: NSObject, NSSoundDelegate {
 
     private var responseSounds: [NSSound] = []
     private var feedbackSounds: [NSSound] = []
+    private var responseContinuations: [ObjectIdentifier: CheckedContinuation<ResponsePlaybackResult, Never>] = [:]
 
-    func playDownloadedAudio(from url: URL, outputUID: String?) async throws {
+    func playDownloadedAudio(from url: URL, outputUID: String?) async throws -> ResponsePlaybackResult {
         stopResponsePlayback()
         let (data, _) = try await URLSession.shared.data(from: url)
-        try play(data: data, outputUID: outputUID, role: .response)
+        return try await playResponse(data: data, outputUID: outputUID)
     }
 
     @discardableResult
@@ -25,16 +31,20 @@ final class SpeechPlaybackService: NSObject, NSSoundDelegate {
             return false
         }
 
-        playingSounds.forEach { $0.pause() }
+        playingSounds.forEach {
+            $0.pause()
+            completeResponsePlayback($0, result: .interrupted, removeSound: false)
+        }
         return true
     }
 
     func stopResponsePlayback() {
-        responseSounds.forEach {
+        let sounds = responseSounds
+        sounds.forEach {
             $0.delegate = nil
             $0.stop()
+            completeResponsePlayback($0, result: .interrupted, removeSound: true)
         }
-        responseSounds.removeAll()
     }
 
     func playWakeSound(outputUID: String?) {
@@ -88,9 +98,37 @@ final class SpeechPlaybackService: NSObject, NSSoundDelegate {
         sound.play()
     }
 
+    @MainActor
+    private func playResponse(data: Data, outputUID: String?) async throws -> ResponsePlaybackResult {
+        guard let sound = NSSound(data: data) else {
+            throw PlaybackError.unsupportedAudio
+        }
+        if let outputUID, !outputUID.isEmpty {
+            sound.playbackDeviceIdentifier = outputUID
+        }
+        sound.delegate = self
+        responseSounds.append(sound)
+
+        return await withCheckedContinuation { continuation in
+            responseContinuations[ObjectIdentifier(sound)] = continuation
+            if !sound.play() {
+                completeResponsePlayback(sound, result: .interrupted, removeSound: true)
+            }
+        }
+    }
+
     func sound(_ sound: NSSound, didFinishPlaying finishedPlaying: Bool) {
-        responseSounds.removeAll { $0 === sound }
+        if responseSounds.contains(where: { $0 === sound }) {
+            completeResponsePlayback(sound, result: finishedPlaying ? .finished : .interrupted, removeSound: true)
+        }
         feedbackSounds.removeAll { $0 === sound }
+    }
+
+    private func completeResponsePlayback(_ sound: NSSound, result: ResponsePlaybackResult, removeSound: Bool) {
+        responseContinuations.removeValue(forKey: ObjectIdentifier(sound))?.resume(returning: result)
+        if removeSound {
+            responseSounds.removeAll { $0 === sound }
+        }
     }
 }
 

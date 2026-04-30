@@ -24,6 +24,10 @@ final class AppModel: ObservableObject {
     private var shouldKeepSessionRunning = false
     private var wakeWordRestartTask: Task<Void, Never>?
     private var didReachSpeechInCurrentRun = false
+    private var currentPipelineUsesWakeWord = false
+    private var isPlayingAssistantResponse = false
+    private var shouldContinueConversationAfterPlayback = false
+    private var continuedConversationID: String?
 
     var isSessionActive: Bool {
         shouldKeepSessionRunning || audioCapture.isCapturing || assistClient.binaryHandlerID != nil
@@ -83,6 +87,9 @@ final class AppModel: ObservableObject {
         do {
             shouldKeepSessionRunning = true
             didReachSpeechInCurrentRun = false
+            currentPipelineUsesWakeWord = settings.useWakeWord
+            shouldContinueConversationAfterPlayback = false
+            continuedConversationID = nil
             configureAssistCallbacks()
             try await assistClient.connect(homeAssistantURL: settings.homeAssistantURL, token: settings.accessToken)
             try await assistClient.startPipeline(settings: settings, sampleRate: selectedInputSampleRate())
@@ -97,7 +104,11 @@ final class AppModel: ObservableObject {
         shouldKeepSessionRunning = false
         wakeWordRestartTask?.cancel()
         wakeWordRestartTask = nil
+        shouldContinueConversationAfterPlayback = false
+        continuedConversationID = nil
+        isPlayingAssistantResponse = false
         audioCapture.stop()
+        playback.stopResponsePlayback()
         await assistClient.finishAudio()
         assistClient.disconnect()
         state = .idle
@@ -172,6 +183,15 @@ final class AppModel: ObservableObject {
             if case .idle = newState,
                self.shouldKeepSessionRunning,
                self.settings.useWakeWord {
+                if self.shouldContinueConversationAfterPlayback {
+                    if self.isPlayingAssistantResponse {
+                        self.state = .speaking
+                    } else {
+                        Task { await self.startContinuedConversationIfNeeded() }
+                    }
+                    return
+                }
+
                 if self.didReachSpeechInCurrentRun,
                    self.settings.playReadyForWakeWordSound {
                     self.playback.playReadyForWakeWordSound(outputUID: self.selectedOutputUID())
@@ -200,7 +220,7 @@ final class AppModel: ObservableObject {
                         self?.assistClient.sendAudioChunk(chunk)
                     }
                 }
-                self.state = self.settings.useWakeWord ? .waitingForWakeWord : .listening
+                self.state = self.currentPipelineUsesWakeWord ? .waitingForWakeWord : .listening
             } catch {
                 self.state = .error(error.localizedDescription)
                 self.log(error.localizedDescription)
@@ -216,26 +236,90 @@ final class AppModel: ObservableObject {
                 self.playback.playWakeSound(outputUID: self.selectedOutputUID())
             }
         }
+        assistClient.onConversationContinuation = { [weak self] shouldContinue, conversationID in
+            guard let self else { return }
+            self.shouldContinueConversationAfterPlayback = shouldContinue
+            self.continuedConversationID = shouldContinue ? conversationID : nil
+        }
         assistClient.onPipelineError = { [weak self] code, message in
             guard let self else { return }
             self.handlePipelineError(code: code, message: message)
         }
         assistClient.onTTSURL = { [weak self] url in
             guard let self else { return }
+            self.isPlayingAssistantResponse = true
             Task {
                 do {
-                    try await self.playback.playDownloadedAudio(from: url, outputUID: self.selectedOutputUID())
+                    let result = try await self.playback.playDownloadedAudio(from: url, outputUID: self.selectedOutputUID())
+                    await self.handleAssistantPlaybackFinished(result)
                 } catch {
                     await MainActor.run {
+                        self.isPlayingAssistantResponse = false
+                        self.shouldContinueConversationAfterPlayback = false
+                        self.continuedConversationID = nil
                         self.log("Playback failed: \(error.localizedDescription)")
+                        if self.shouldKeepSessionRunning, self.settings.useWakeWord {
+                            self.state = .waitingForWakeWord
+                            self.scheduleWakeWordRestart(reason: "Restarting wake word listener after playback failure")
+                        }
                     }
                 }
             }
         }
     }
 
+    private func handleAssistantPlaybackFinished(_ result: ResponsePlaybackResult) async {
+        isPlayingAssistantResponse = false
+
+        guard result == .finished,
+              shouldContinueConversationAfterPlayback
+        else {
+            if result == .interrupted {
+                shouldContinueConversationAfterPlayback = false
+                continuedConversationID = nil
+            }
+            return
+        }
+
+        await startContinuedConversationIfNeeded()
+    }
+
+    private func startContinuedConversationIfNeeded() async {
+        guard shouldKeepSessionRunning,
+              shouldContinueConversationAfterPlayback,
+              assistClient.isConnected
+        else {
+            shouldContinueConversationAfterPlayback = false
+            continuedConversationID = nil
+            return
+        }
+
+        let conversationID = continuedConversationID
+        shouldContinueConversationAfterPlayback = false
+        continuedConversationID = nil
+        didReachSpeechInCurrentRun = false
+        currentPipelineUsesWakeWord = false
+        state = .listening
+        log("Listening for follow-up response")
+
+        do {
+            try await assistClient.startPipeline(
+                settings: settings,
+                sampleRate: selectedInputSampleRate(),
+                startStage: .stt,
+                conversationID: conversationID
+            )
+        } catch {
+            shouldKeepSessionRunning = false
+            state = .error(error.localizedDescription)
+            log(error.localizedDescription)
+        }
+    }
+
     private func handlePipelineError(code: String, message: String) {
         audioCapture.stop()
+        shouldContinueConversationAfterPlayback = false
+        continuedConversationID = nil
 
         guard settings.useWakeWord,
               shouldKeepSessionRunning,
@@ -275,6 +359,7 @@ final class AppModel: ObservableObject {
 
             do {
                 self.didReachSpeechInCurrentRun = false
+                self.currentPipelineUsesWakeWord = self.settings.useWakeWord
                 try await self.assistClient.startPipeline(settings: self.settings, sampleRate: self.selectedInputSampleRate())
             } catch {
                 self.shouldKeepSessionRunning = false
