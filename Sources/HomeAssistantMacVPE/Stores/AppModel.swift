@@ -209,6 +209,9 @@ final class AppModel: ObservableObject {
         assistClient.onWakeWordDetected = { [weak self] in
             guard let self else { return }
             self.didReachSpeechInCurrentRun = true
+            if self.playback.pauseResponsePlayback() {
+                self.log("Paused playback after wake word")
+            }
             if self.settings.playWakeWordSound {
                 self.playback.playWakeSound(outputUID: self.selectedOutputUID())
             }

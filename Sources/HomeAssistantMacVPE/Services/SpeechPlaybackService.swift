@@ -4,11 +4,37 @@ import Foundation
 
 @MainActor
 final class SpeechPlaybackService: NSObject, NSSoundDelegate {
-    private var activeSounds: [NSSound] = []
+    private enum SoundRole {
+        case response
+        case feedback
+    }
+
+    private var responseSounds: [NSSound] = []
+    private var feedbackSounds: [NSSound] = []
 
     func playDownloadedAudio(from url: URL, outputUID: String?) async throws {
+        stopResponsePlayback()
         let (data, _) = try await URLSession.shared.data(from: url)
-        try play(data: data, outputUID: outputUID)
+        try play(data: data, outputUID: outputUID, role: .response)
+    }
+
+    @discardableResult
+    func pauseResponsePlayback() -> Bool {
+        let playingSounds = responseSounds.filter(\.isPlaying)
+        guard !playingSounds.isEmpty else {
+            return false
+        }
+
+        playingSounds.forEach { $0.pause() }
+        return true
+    }
+
+    func stopResponsePlayback() {
+        responseSounds.forEach {
+            $0.delegate = nil
+            $0.stop()
+        }
+        responseSounds.removeAll()
     }
 
     func playWakeSound(outputUID: String?) {
@@ -36,16 +62,16 @@ final class SpeechPlaybackService: NSObject, NSSoundDelegate {
             pcm.append(Data(bytes: &sample, count: MemoryLayout<Int16>.size))
         }
 
-        try? playPCM(pcm, rate: sampleRate, channels: 1, outputUID: outputUID)
+        try? playPCM(pcm, rate: sampleRate, channels: 1, outputUID: outputUID, role: .feedback)
     }
 
     @MainActor
-    func playPCM(_ pcm: Data, rate: Int, channels: Int, outputUID: String?) throws {
-        try play(data: WAVEncoding.wrapPCM16(pcm, sampleRate: rate, channels: channels), outputUID: outputUID)
+    private func playPCM(_ pcm: Data, rate: Int, channels: Int, outputUID: String?, role: SoundRole) throws {
+        try play(data: WAVEncoding.wrapPCM16(pcm, sampleRate: rate, channels: channels), outputUID: outputUID, role: role)
     }
 
     @MainActor
-    func play(data: Data, outputUID: String?) throws {
+    private func play(data: Data, outputUID: String?, role: SoundRole) throws {
         guard let sound = NSSound(data: data) else {
             throw PlaybackError.unsupportedAudio
         }
@@ -53,12 +79,18 @@ final class SpeechPlaybackService: NSObject, NSSoundDelegate {
             sound.playbackDeviceIdentifier = outputUID
         }
         sound.delegate = self
-        activeSounds.append(sound)
+        switch role {
+        case .response:
+            responseSounds.append(sound)
+        case .feedback:
+            feedbackSounds.append(sound)
+        }
         sound.play()
     }
 
     func sound(_ sound: NSSound, didFinishPlaying finishedPlaying: Bool) {
-        activeSounds.removeAll { $0 === sound }
+        responseSounds.removeAll { $0 === sound }
+        feedbackSounds.removeAll { $0 === sound }
     }
 }
 
