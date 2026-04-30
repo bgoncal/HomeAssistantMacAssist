@@ -6,7 +6,6 @@ final class AudioCaptureService {
     struct Format {
         static let width = 2
         static let channels: AVAudioChannelCount = 1
-        static let softwareGain: Float = 8.0
     }
 
     private let engine = AVAudioEngine()
@@ -14,9 +13,16 @@ final class AudioCaptureService {
     private(set) var isCapturing = false
     private var didReportFirstChunk = false
 
-    func start(inputDeviceID: AudioDeviceID?, sampleRate: Double, onDiagnostic: @escaping (String) -> Void = { _ in }, onChunk: @escaping (Data) -> Void) throws {
+    func start(
+        inputDeviceID: AudioDeviceID?,
+        sampleRate: Double,
+        gain: Double,
+        onDiagnostic: @escaping (String) -> Void = { _ in },
+        onChunk: @escaping (Data) -> Void
+    ) throws {
         stop()
         didReportFirstChunk = false
+        let clampedGain = Float(max(0.25, min(12.0, gain)))
 
         let inputNode = engine.inputNode
         if let inputDeviceID, let audioUnit = inputNode.audioUnit {
@@ -34,7 +40,7 @@ final class AudioCaptureService {
 
         let sourceFormat = inputNode.outputFormat(forBus: 0)
         onDiagnostic("Mic source format: \(Int(sourceFormat.sampleRate)) Hz, \(sourceFormat.channelCount) channel, \(sourceFormat.commonFormat.label)")
-        onDiagnostic("Assist audio stream: \(Int(sampleRate)) Hz, 16-bit, 1 channel, pcm, gain \(Int(Self.Format.softwareGain))x")
+        onDiagnostic("Assist audio stream: \(Int(sampleRate)) Hz, 16-bit, 1 channel, pcm, gain \(String(format: "%.1f", clampedGain))x")
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
@@ -47,7 +53,7 @@ final class AudioCaptureService {
         converter = AVAudioConverter(from: sourceFormat, to: targetFormat)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: sourceFormat) { [weak self] buffer, _ in
             guard let self else { return }
-            guard let data = self.convert(buffer, from: sourceFormat, to: targetFormat), !data.isEmpty else {
+            guard let data = self.convert(buffer, from: sourceFormat, to: targetFormat, gain: clampedGain), !data.isEmpty else {
                 return
             }
             if !self.didReportFirstChunk {
@@ -73,7 +79,7 @@ final class AudioCaptureService {
         didReportFirstChunk = false
     }
 
-    private func convert(_ buffer: AVAudioPCMBuffer, from sourceFormat: AVAudioFormat, to targetFormat: AVAudioFormat) -> Data? {
+    private func convert(_ buffer: AVAudioPCMBuffer, from sourceFormat: AVAudioFormat, to targetFormat: AVAudioFormat, gain: Float) -> Data? {
         guard let converter else {
             return nil
         }
@@ -100,7 +106,7 @@ final class AudioCaptureService {
             return nil
         }
 
-        return converted.pcm16LittleEndianData(gain: Self.Format.softwareGain)
+        return converted.pcm16LittleEndianData(gain: gain)
     }
 }
 

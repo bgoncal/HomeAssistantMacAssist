@@ -21,6 +21,7 @@ private struct DetailView: View {
                         ConnectionSection(model: model)
                         BehaviorSection(model: model)
                         AudioSection(model: model)
+                        AudioProcessingSection(model: model)
                     }
                     .padding(24)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -144,6 +145,59 @@ private struct AudioSection: View {
                     Text(device.displayName).tag(device.uid)
                 }
             }
+        }
+    }
+}
+
+private struct AudioProcessingSection: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        SectionBox(title: "Audio Processing", systemImage: "waveform.path.ecg") {
+            ProcessingSlider(
+                title: "Mic gain",
+                value: model.clampedDoubleBinding(\.micGain, range: 0.25...12.0),
+                range: 0.25...12.0,
+                step: 0.25,
+                valueText: String(format: "%.2fx", model.settings.micGain)
+            )
+
+            ProcessingSlider(
+                title: "Noise suppression",
+                value: model.integerSliderBinding(\.noiseSuppressionLevel, range: 0...4),
+                range: 0...4,
+                step: 1,
+                valueText: "\(model.settings.noiseSuppressionLevel)"
+            )
+
+            ProcessingSlider(
+                title: "Auto gain",
+                value: model.integerSliderBinding(\.autoGainDBFS, range: 0...31),
+                range: 0...31,
+                step: 1,
+                valueText: "\(model.settings.autoGainDBFS) dBFS"
+            )
+        }
+    }
+}
+
+struct ProcessingSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let valueText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(valueText)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Slider(value: $value, in: range, step: step)
         }
     }
 }

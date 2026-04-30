@@ -12,6 +12,9 @@ struct AppSettings: Codable, Equatable {
     var playWakeWordSound = true
     var playProcessingSound = true
     var playReadyForWakeWordSound = true
+    var micGain = 2.0
+    var noiseSuppressionLevel = 0
+    var autoGainDBFS = 8
 
     var hasHomeAssistantConnection: Bool {
         !homeAssistantURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -33,5 +36,8 @@ struct AppSettings: Codable, Equatable {
         playWakeWordSound = try container.decodeIfPresent(Bool.self, forKey: .playWakeWordSound) ?? playWakeWordSound
         playProcessingSound = try container.decodeIfPresent(Bool.self, forKey: .playProcessingSound) ?? playProcessingSound
         playReadyForWakeWordSound = try container.decodeIfPresent(Bool.self, forKey: .playReadyForWakeWordSound) ?? playReadyForWakeWordSound
+        micGain = try container.decodeIfPresent(Double.self, forKey: .micGain) ?? micGain
+        noiseSuppressionLevel = try container.decodeIfPresent(Int.self, forKey: .noiseSuppressionLevel) ?? noiseSuppressionLevel
+        autoGainDBFS = try container.decodeIfPresent(Int.self, forKey: .autoGainDBFS) ?? autoGainDBFS
     }
 }

@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     private lazy var assistClient = HomeAssistantAssistClient()
     private var shouldKeepSessionRunning = false
     private var wakeWordRestartTask: Task<Void, Never>?
+    private var didReachSpeechInCurrentRun = false
 
     var isSessionActive: Bool {
         shouldKeepSessionRunning || audioCapture.isCapturing || assistClient.binaryHandlerID != nil
@@ -81,6 +82,7 @@ final class AppModel: ObservableObject {
 
         do {
             shouldKeepSessionRunning = true
+            didReachSpeechInCurrentRun = false
             configureAssistCallbacks()
             try await assistClient.connect(homeAssistantURL: settings.homeAssistantURL, token: settings.accessToken)
             try await assistClient.startPipeline(settings: settings, sampleRate: selectedInputSampleRate())
@@ -141,6 +143,20 @@ final class AppModel: ObservableObject {
         )
     }
 
+    func clampedDoubleBinding(_ keyPath: WritableKeyPath<AppSettings, Double>, range: ClosedRange<Double>) -> Binding<Double> {
+        Binding(
+            get: { self.settings[keyPath: keyPath] },
+            set: { self.settings[keyPath: keyPath] = min(max($0, range.lowerBound), range.upperBound) }
+        )
+    }
+
+    func integerSliderBinding(_ keyPath: WritableKeyPath<AppSettings, Int>, range: ClosedRange<Int>) -> Binding<Double> {
+        Binding(
+            get: { Double(self.settings[keyPath: keyPath]) },
+            set: { self.settings[keyPath: keyPath] = min(max(Int($0.rounded()), range.lowerBound), range.upperBound) }
+        )
+    }
+
     private func configureAssistCallbacks() {
         assistClient.onLog = { [weak self] message in
             self?.log(message)
@@ -156,9 +172,11 @@ final class AppModel: ObservableObject {
             if case .idle = newState,
                self.shouldKeepSessionRunning,
                self.settings.useWakeWord {
-                if self.settings.playReadyForWakeWordSound {
+                if self.didReachSpeechInCurrentRun,
+                   self.settings.playReadyForWakeWordSound {
                     self.playback.playReadyForWakeWordSound(outputUID: self.selectedOutputUID())
                 }
+                self.didReachSpeechInCurrentRun = false
                 self.state = .waitingForWakeWord
                 self.scheduleWakeWordRestart(reason: "Restarting wake word listener")
             } else {
@@ -171,6 +189,7 @@ final class AppModel: ObservableObject {
                 try self.audioCapture.start(
                     inputDeviceID: self.selectedInputDeviceID(),
                     sampleRate: self.selectedInputSampleRate(),
+                    gain: self.settings.micGain,
                     onDiagnostic: { [weak self] message in
                         Task { @MainActor in
                             self?.log(message)
@@ -189,6 +208,7 @@ final class AppModel: ObservableObject {
         }
         assistClient.onWakeWordDetected = { [weak self] in
             guard let self else { return }
+            self.didReachSpeechInCurrentRun = true
             if self.settings.playWakeWordSound {
                 self.playback.playWakeSound(outputUID: self.selectedOutputUID())
             }
@@ -224,6 +244,7 @@ final class AppModel: ObservableObject {
         }
 
         state = .waitingForWakeWord
+        didReachSpeechInCurrentRun = false
         scheduleWakeWordRestart(reason: "Restarting wake word listener after \(code)")
     }
 
@@ -250,6 +271,7 @@ final class AppModel: ObservableObject {
             }
 
             do {
+                self.didReachSpeechInCurrentRun = false
                 try await self.assistClient.startPipeline(settings: self.settings, sampleRate: self.selectedInputSampleRate())
             } catch {
                 self.shouldKeepSessionRunning = false

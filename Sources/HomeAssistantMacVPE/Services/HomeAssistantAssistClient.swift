@@ -117,10 +117,17 @@ final class HomeAssistantAssistClient {
             "sample_rate": Int(sampleRate)
         ]
 
+        let noiseSuppressionLevel = max(0, min(4, settings.noiseSuppressionLevel))
+        let autoGainDBFS = max(0, min(31, settings.autoGainDBFS))
+        if noiseSuppressionLevel > 0 {
+            input["noise_suppression_level"] = noiseSuppressionLevel
+        }
+        if autoGainDBFS > 0 {
+            input["auto_gain_dbfs"] = autoGainDBFS
+        }
+
         if settings.useWakeWord {
             input["timeout"] = 30
-            input["noise_suppression_level"] = 2
-            input["auto_gain_dbfs"] = 31
         }
 
         var command: [String: Any] = [
