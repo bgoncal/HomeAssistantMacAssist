@@ -147,9 +147,18 @@ final class AppModel: ObservableObject {
         }
         assistClient.onState = { [weak self] newState in
             guard let self else { return }
+            if self.state == .listening,
+               newState == .thinking,
+               self.settings.playProcessingSound {
+                self.playback.playProcessingSound(outputUID: self.selectedOutputUID())
+            }
+
             if case .idle = newState,
                self.shouldKeepSessionRunning,
                self.settings.useWakeWord {
+                if self.settings.playReadyForWakeWordSound {
+                    self.playback.playReadyForWakeWordSound(outputUID: self.selectedOutputUID())
+                }
                 self.state = .waitingForWakeWord
                 self.scheduleWakeWordRestart(reason: "Restarting wake word listener")
             } else {
@@ -180,7 +189,9 @@ final class AppModel: ObservableObject {
         }
         assistClient.onWakeWordDetected = { [weak self] in
             guard let self else { return }
-            self.playback.playWakeSound(outputUID: self.selectedOutputUID())
+            if self.settings.playWakeWordSound {
+                self.playback.playWakeSound(outputUID: self.selectedOutputUID())
+            }
         }
         assistClient.onPipelineError = { [weak self] code, message in
             guard let self else { return }

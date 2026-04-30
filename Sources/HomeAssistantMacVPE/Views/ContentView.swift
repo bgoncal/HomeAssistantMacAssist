@@ -118,6 +118,12 @@ private struct BehaviorSection: View {
             ))
 
             Toggle("Start listening when the app opens", isOn: model.binding(\.startListeningOnLaunch))
+
+            Divider()
+
+            Toggle("Wake word detection sound", isOn: model.binding(\.playWakeWordSound))
+            Toggle("Processing sound", isOn: model.binding(\.playProcessingSound))
+            Toggle("Ready for wake word sound", isOn: model.binding(\.playReadyForWakeWordSound))
         }
     }
 }

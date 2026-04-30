@@ -12,16 +12,27 @@ final class SpeechPlaybackService: NSObject, NSSoundDelegate {
     }
 
     func playWakeSound(outputUID: String?) {
+        playTone(frequency: 880.0, duration: 0.16, amplitude: 11_000, outputUID: outputUID)
+    }
+
+    func playProcessingSound(outputUID: String?) {
+        playTone(frequency: 660.0, duration: 0.12, amplitude: 9_000, outputUID: outputUID)
+    }
+
+    func playReadyForWakeWordSound(outputUID: String?) {
+        playTone(frequency: 520.0, duration: 0.14, amplitude: 8_500, outputUID: outputUID)
+    }
+
+    private func playTone(frequency: Double, duration: Double, amplitude: Double, outputUID: String?) {
         let sampleRate = 44_100
-        let duration = 0.16
         let frameCount = Int(Double(sampleRate) * duration)
         var pcm = Data(capacity: frameCount * 2)
 
         for frame in 0..<frameCount {
             let progress = Double(frame) / Double(frameCount)
             let envelope = sin(progress * .pi)
-            let tone = sin(2.0 * .pi * 880.0 * Double(frame) / Double(sampleRate))
-            var sample = Int16(tone * envelope * 11_000).littleEndian
+            let tone = sin(2.0 * .pi * frequency * Double(frame) / Double(sampleRate))
+            var sample = Int16(tone * envelope * amplitude).littleEndian
             pcm.append(Data(bytes: &sample, count: MemoryLayout<Int16>.size))
         }
 
